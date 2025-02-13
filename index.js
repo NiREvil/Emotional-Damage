@@ -1,4 +1,4 @@
-// EDtunnel - A Cloudflare Worker-based VLESS Proxy with WebSocket Transport
+// EDtunnel - A Cloudflare Worker-based VL Proxy with WebSocket Transport
 // @ts-ignore
 import { connect } from 'cloudflare:sockets';
 
@@ -16,7 +16,7 @@ let userID = 'd342d11e-d424-4583-b36e-524ab1f0afa4';
  * Array of proxy server addresses with ports
  * Format: ['hostname:port', 'hostname:port']
  */
-const proxyIPs = ['nima.nscl.ir'];
+const proxyIPs = ['nima.nscl.ir', 'turk.radicalization.ir'];
 
 // Randomly select a proxy server from the pool
 let proxyIP = proxyIPs[Math.floor(Math.random() * proxyIPs.length)];
@@ -590,7 +590,7 @@ function MakeReadableWebSocketStream(webSocketServer, earlyDataHeader, log) {
 }
 
 /**
- * Processes VLESS protocol header.
+ * Processes VL protocol header.
  * Extracts and validates protocol information from buffer.
  * @param {ArrayBuffer} protocolBuffer - Buffer containing protocol header
  * @param {string} userID - User ID for validation
@@ -1038,14 +1038,14 @@ const pt = 'dmxlc3M=';
 const ed = 'RUR0dW5uZWw=';
 
 /**
- * Generates configuration for VLESS client.
+ * Generates configuration for VL client.
  * @param {string} userIDs - Single or comma-separated user IDs
  * @param {string} hostName - Host name for configuration
  * @param {string|string[]} proxyIP - Proxy IP address or array of addresses
  * @returns {string} Configuration HTML
  */
 function getConfig(userIDs, hostName, proxyIP) {
-	const commonUrlPart = `?encryption=none&security=tls&sni=${hostName}&fp=randomized&type=ws&host=${hostName}&path=%2F%3Fed%3D2048#${hostName}`;
+	const commonUrlPart = `?encryption=none&security=tls&sni=${hostName}&fp=randomized&type=ws&host=${hostName}&path=%2Fapi%2Fv1%3Fed%3D2560#${hostName}`;
 
 	// Split the userIDs into an array
 	const userIDArray = userIDs.split(",");
@@ -1256,7 +1256,7 @@ function getConfig(userIDs, hostName, proxyIP) {
       const userIDArray = ${JSON.stringify(userIDArray)};
       const pt = "${pt}";
       const at = "${at}";
-      const commonUrlPart = "?encryption=none&security=tls&sni=${hostName}&fp=randomized&type=ws&host=${hostName}&path=%2F%3Fed%3D2048#${hostName}";
+      const commonUrlPart = "?encryption=none&security=tls&sni=${hostName}&fp=randomized&type=ws&host=${hostName}&path=%2Fapi%2Fv1%3Fed%3D2560#${hostName}";
 
       function copyToClipboard(text) {
         navigator.clipboard.writeText(text)
@@ -1298,15 +1298,10 @@ function GenSub(userID_path, hostname, proxyIP) {
 		'icook.hk',
 		'japan.com',
 		'malaysia.com',
-		'russia.com',
 		'singapore.com',
 		'www.visa.com',
 		'www.csgo.com',
-		'www.shopify.com',
-		'www.whatismyip.com',
 		'www.ipget.net',
-		'cloudflare.182682.xyz', =
-		'cfip.cfcdn.vip',
 		proxyIPs,
 		'cf.0sm.com', 
 		'cloudflare-ip.mofashi.ltd',  
@@ -1323,9 +1318,9 @@ function GenSub(userID_path, hostname, proxyIP) {
 
 	const userIDArray = userID_path.includes(',') ? userID_path.split(",") : [userID_path];
 	const proxyIPArray = Array.isArray(proxyIP) ? proxyIP : (proxyIP ? (proxyIP.includes(',') ? proxyIP.split(',') : [proxyIP]) : proxyIPs);
-	const randomPath = () => '/' + Math.random().toString(36).substring(2, 15) + '?ed=2048';
-	const commonUrlPartHttp = `?encryption=none&security=none&fp=random&type=ws&host=${hostname}&path=${encodeURIComponent(randomPath())}#`;
-	const commonUrlPartHttps = `?encryption=none&security=tls&sni=${hostname}&fp=random&type=ws&host=${hostname}&path=%2F%3Fed%3D2048#`;
+	const randomPath = () => '/' + Math.random().toString(36).substring(2, 15) + '?ed=2560';
+	const commonUrlPartHttp = `?encryption=none&security=none&fp=chrome&type=ws&host=${hostname}&path=${encodeURIComponent(randomPath())}#`;
+	const commonUrlPartHttps = `?encryption=none&security=tls&sni=${hostname}&fp=chrome&type=ws&host=${hostname}&path=%2Fapi%2Fv1%3Fed%3D2560#`;
 
 	const result = userIDArray.flatMap((userID) => {
 		let allUrls = [];
