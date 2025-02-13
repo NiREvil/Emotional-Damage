@@ -16,7 +16,7 @@ let userID = 'd342d11e-d424-4583-b36e-524ab1f0afa4';
  * Array of proxy server addresses with ports
  * Format: ['hostname:port', 'hostname:port']
  */
-const proxyIPs = ['cdn.xn--b6gac.eu.org:443', 'cdn-all.xn--b6gac.eu.org:443'];
+const proxyIPs = ['nima.nscl.ir'];
 
 // Randomly select a proxy server from the pool
 let proxyIP = proxyIPs[Math.floor(Math.random() * proxyIPs.length)];
@@ -384,7 +384,6 @@ async function handleDefaultPath(url, request) {
 	  </html>
 	`;
 
-	// 返回伪装的网盘页面
 	return new Response(DrivePage, {
 		headers: {
 			"content-type": "text/html;charset=UTF-8",
@@ -434,6 +433,7 @@ async function ProtocolOverWSHandler(request) {
 				return;
 			}
 
+
 			const {
 				hasError,
 				message,
@@ -443,24 +443,22 @@ async function ProtocolOverWSHandler(request) {
 				rawDataIndex,
 				ProtocolVersion = new Uint8Array([0, 0]),
 				isUDP,
-			} = ProcessProtocolHeader(chunk, userID);
+			} = processProtocolHeader(chunk, userID);
 			address = addressRemote;
-			portWithRandomLog = `${portRemote}--${Math.random()} ${isUDP ? 'udp ' : 'tcp '
-				} `;
+			portWithRandomLog = `${portRemote}--${Math.random()} ${isUDP ? 'udp ' : 'tcp '} `;
 			if (hasError) {
-				// controller.error(message);
-				throw new Error(message); // cf seems has bug, controller.error will not end stream
+				throw new Error(message);
+				return;
 			}
-			// Handle UDP connections for DNS (port 53) only
 			if (isUDP) {
 				if (portRemote === 53) {
 					isDns = true;
 				} else {
-					throw new Error('UDP proxy is only enabled for DNS (port 53)');
+					throw new Error('UDP Agent only DNS（53 port）enable');
+					return;
 				}
-				return; // Early return after setting isDns or throwing error
 			}
-			// ["version", "附加信息长度 N"]
+
 			const ProtocolResponseHeader = new Uint8Array([ProtocolVersion[0], 0]);
 			const rawClientData = chunk.slice(rawDataIndex);
 
@@ -815,77 +813,51 @@ function stringify(arr, offset = 0) {
 }
 
 /**
- * Handles DNS query through UDP.
- * Processes DNS requests and forwards them.
- * @param {ArrayBuffer} udpChunk - UDP data chunk
- * @param {WebSocket} webSocket - WebSocket connection
- * @param {ArrayBuffer} protocolResponseHeader - Protocol response header
- * @param {Function} log - Logging function
+ * DNS 
+ * @param {ArrayBuffer} udpChunk
+ * @param {ArrayBuffer} 
+ * @param {(string)=> void} log 
  */
-async function handleUDPOutBound(webSocket, protocolResponseHeader, log) {
-	let isHeaderSent = false;
+async function handleDNSQuery(udpChunk, webSocket, ProtocolResponseHeader, log) {
+	try {
+		const dnsServer = '8.8.4.4'; 
+		const dnsPort = 53; 
 
-	const transformStream = new TransformStream({
-		start(controller) {},
-		transform(chunk, controller) {
-			// udp message 2 byte is the the length of udp data
-			// TODO: this should have bug, because maybe udp chunk can be in two websocket message
-			for (let index = 0; index < chunk.byteLength; ) {
-				const lengthBuffer = chunk.slice(index, index + 2);
-				const udpPakcetLength = new DataView(lengthBuffer).getUint16(0);
-				const udpData = new Uint8Array(chunk.slice(index + 2, index + 2 + udpPakcetLength));
-				index = index + 2 + udpPakcetLength;
-				controller.enqueue(udpData);
-			}
-		},
-		flush(controller) {},
-	});
+		let ProtocolHeader = ProtocolResponseHeader; 
 
-	// only handle dns udp for now
-	transformStream.readable
-		.pipeTo(
-			new WritableStream({
-				async write(chunk) {
-					const resp = await fetch('https://1.1.1.1/dns-query', {
-						method: 'POST',
-						headers: {
-							'content-type': 'application/dns-message',
-						},
-						body: chunk,
-					});
-					const dnsQueryResult = await resp.arrayBuffer();
-					const udpSize = dnsQueryResult.byteLength;
-					const udpSizeBuffer = new Uint8Array([(udpSize >> 8) & 0xff, udpSize & 0xff]);
-
-					if (webSocket.readyState === WS_READY_STATE_OPEN) {
-						log(`dns query success, length: ${udpSize}`);
-						if (isHeaderSent) {
-							webSocket.send(await new Blob([udpSizeBuffer, dnsQueryResult]).arrayBuffer());
-						} else {
-							webSocket.send(
-								await new Blob([protocolResponseHeader, udpSizeBuffer, dnsQueryResult]).arrayBuffer(),
-							);
-							isHeaderSent = true;
-						}
-					}
-				},
-			})
-		)
-		.catch(error => {
-			log('dns query error: ' + error);
+		const tcpSocket = connect({
+			hostname: dnsServer,
+			port: dnsPort,
 		});
 
-	const writer = transformStream.writable.getWriter();
+		log(`Connect to ${dnsServer}:${dnsPort}`); 
+		const writer = tcpSocket.writable.getWriter();
+		await writer.write(udpChunk); 
+		writer.releaseLock(); 
 
-	return {
-		/**
-		 *
-		 * @param {Uint8Array} chunk
-		 */
-		write(chunk) {
-			writer.write(chunk);
-		},
-	};
+		await tcpSocket.readable.pipeTo(new WritableStream({
+			async write(chunk) {
+				if (webSocket.readyState === WS_READY_STATE_OPEN) {
+					if (ProtocolHeader) {
+						webSocket.send(await new Blob([ProtocolHeader, chunk]).arrayBuffer());
+						ProtocolHeader = null; //  null
+					} else {
+						webSocket.send(chunk);
+					}
+				}
+			},
+			close() {
+				log(`DNS server (${dnsServer}) TCP connection closed`); // Record connection closing information
+			},
+			abort(reason) {
+				console.error(`DNS server (${dnsServer}) TCP Abnormal connection interruption`, reason); 
+			},
+		}));
+	} catch (error) {
+		console.error(
+			`handleDNSQuery Function exception, error message: ${error.message}`
+		);
+	}
 }
 
 /**
@@ -1332,22 +1304,21 @@ function GenSub(userID_path, hostname, proxyIP) {
 		'www.csgo.com',
 		'www.shopify.com',
 		'www.whatismyip.com',
-		'www.ipget.net',       
-		'cfip.cfcdn.vip',               
+		'www.ipget.net',
+		'cloudflare.182682.xyz', =
+		'cfip.cfcdn.vip',
 		proxyIPs,
-		'nima.nscl.ir',
-		'bpb.radically.pro',
-		'cf.0sm.com',               
-		'cloudflare-ip.mofashi.ltd', 
-		'cf.090227.xyz',     
-		'cf.zhetengsha.eu.org',  
-		'cloudflare.9jy.cc',      
-		'cf.zerone-cdn.pp.ua',     
-		'cfip.1323123.xyz',    
-		'cdn.tzpro.xyz', 
-		'cf.877771.xyz',  
+		'cf.0sm.com', 
+		'cloudflare-ip.mofashi.ltd',  
+		'cf.090227.xyz',  
+		'cf.zhetengsha.eu.org',       
+		'cloudflare.9jy.cc',  
+		'cf.zerone-cdn.pp.ua',   
+		'cfip.1323123.xyz',     
+		'cdn.tzpro.xyz',   
+		'cf.877771.xyz',              
 		'cnamefuckxxs.yuchen.icu',  
-		'cfip.xxxxxxxx.tk', 
+		'cfip.xxxxxxxx.tk',            
 	]);
 
 	const userIDArray = userID_path.includes(',') ? userID_path.split(",") : [userID_path];
