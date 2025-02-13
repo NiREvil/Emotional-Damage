@@ -1,10 +1,5 @@
-/**
- * Last Update: 04:20 UTC - Thursday, 5 December 2024
- * - EDtunnel - A Cloudflare Worker-based VLESS Proxy with WebSocket Transport
- * - We are all REvil 
- * 
- */
-
+// EDtunnel - A Cloudflare Worker-based VLESS Proxy with WebSocket Transport
+// @ts-ignore
 import { connect } from 'cloudflare:sockets';
 
 // ======================================
@@ -20,17 +15,16 @@ let userID = 'd342d11e-d424-4583-b36e-524ab1f0afa4';
 /**
  * Array of proxy server addresses with ports
  * Format: ['hostname:port', 'hostname:port']
- * Find proxyIP : https://github.com/NiREvil/vless/blob/main/sub/ProxyIP.md
  */
-const proxyIPs = ['turk.radicalization.ir'];
+const proxyIPs = ['cdn.xn--b6gac.eu.org:443', 'cdn-all.xn--b6gac.eu.org:443'];
 
 // Randomly select a proxy server from the pool
 let proxyIP = proxyIPs[Math.floor(Math.random() * proxyIPs.length)];
 let proxyPort = proxyIP.includes(':') ? proxyIP.split(':')[1] : '443';
 
 // Alternative configurations:
-// Single proxy IP: let proxyIP = 'nima.nscl.ir';
-// IPv6 example: let proxyIP = "2.59.117.217"
+// Single proxy IP: let proxyIP = 'cdn.xn--b6gac.eu.org';
+// IPv6 example: let proxyIP = "[2a01:4f8:c2c:123f:64:5:6810:c55a]"
 
 /**
  * SOCKS5 proxy configuration
@@ -75,24 +69,15 @@ export default {
 			userID = UUID || userID;
 			socks5Address = SOCKS5 || socks5Address;
 			socks5Relay = SOCKS5_RELAY || socks5Relay;
-			if (PROXYIP) {
-				// Split PROXYIP into an array of proxy addresses
-				const proxyAddresses = PROXYIP.split(',').map(addr => addr.trim());
-				// Randomly select one proxy address
-				const selectedProxy = proxyAddresses[Math.floor(Math.random() * proxyAddresses.length)];
-				[proxyIP, proxyPort = '443'] = selectedProxy.split(':');
-			} else {
-				proxyPort = proxyIP.includes(':') ? proxyIP.split(':')[1] : '443';
-				proxyIP = proxyIP.split(':')[0];
-			}
-			console.log('ProxyIP:', proxyIP);
-			console.log('ProxyPort:', proxyPort);
+
+			// Handle proxy configuration
+			const proxyConfig = handleProxyConfig(PROXYIP);
+			proxyIP = proxyConfig.ip;
+			proxyPort = proxyConfig.port;
+
 			if (socks5Address) {
 				try {
-					// Split SOCKS5 into an array of addresses
-					const socks5Addresses = socks5Address.split(',').map(addr => addr.trim());
-					// Randomly select one SOCKS5 address
-					const selectedSocks5 = socks5Addresses[Math.floor(Math.random() * socks5Addresses.length)];
+					const selectedSocks5 = selectRandomAddress(socks5Address);
 					parsedSocks5Address = socks5AddressParser(selectedSocks5);
 					enableSocks = true;
 				} catch (err) {
@@ -101,32 +86,48 @@ export default {
 				}
 			}
 
-			const userID_Path = userID.includes(',') ? userID.split(',')[0] : userID;
+			const userIDs = userID.includes(',') ? userID.split(',').map(id => id.trim()) : [userID];
 			const url = new URL(request.url);
 			const host = request.headers.get('Host');
+			const requestedPath = url.pathname.substring(1); // Remove leading slash
+			const matchingUserID = userIDs.length === 1 ?
+				(requestedPath === userIDs[0] || 
+				 requestedPath === `sub/${userIDs[0]}` || 
+				 requestedPath === `bestip/${userIDs[0]}` ? userIDs[0] : null) :
+				userIDs.find(id => {
+					const patterns = [id, `sub/${id}`, `bestip/${id}`];
+					return patterns.some(pattern => requestedPath.startsWith(pattern));
+				});
 
 			if (request.headers.get('Upgrade') !== 'websocket') {
-				switch (url.pathname) {
-					case '/cf':
-						return new Response(JSON.stringify(request.cf, null, 4), {
-							status: 200,
-							headers: { "Content-Type": "application/json;charset=utf-8" },
-						});
-					case `/${userID_Path}`:
-						return new Response(getConfig(userID, host), {
-							status: 200,
-							headers: { "Content-Type": "text/html; charset=utf-8" },
-						});
-					case `/sub/${userID_Path}`:
-						return new Response(btoa(GenSub(userID, host)), {
-							status: 200,
-							headers: { "Content-Type": "text/plain;charset=utf-8" },
-						});
-					case `/bestip/${userID_Path}`:
-						return fetch(`https://sub.xf.free.hr/auto?host=${host}&uuid=${userID}&path=/`, { headers: request.headers });
-					default:
-						return handleDefaultPath(url, request);
+				if (url.pathname === '/cf') {
+					return new Response(JSON.stringify(request.cf, null, 4), {
+						status: 200,
+						headers: { "Content-Type": "application/json;charset=utf-8" },
+					});
 				}
+
+				if (matchingUserID) {
+					if (url.pathname === `/${matchingUserID}` || url.pathname === `/sub/${matchingUserID}`) {
+						const isSubscription = url.pathname.startsWith('/sub/');
+						const proxyAddresses = PROXYIP ? PROXYIP.split(',').map(addr => addr.trim()) : proxyIP;
+						const content = isSubscription ?
+							GenSub(matchingUserID, host, proxyAddresses) :
+							getConfig(matchingUserID, host, proxyAddresses);
+
+						return new Response(content, {
+							status: 200,
+							headers: {
+								"Content-Type": isSubscription ?
+									"text/plain;charset=utf-8" :
+									"text/html; charset=utf-8"
+							},
+						});
+					} else if (url.pathname === `/bestip/${matchingUserID}`) {
+						return fetch(`https://sub.xf.free.hr/auto?host=${host}&uuid=${matchingUserID}&path=/`, { headers: request.headers });
+					}
+				}
+				return handleDefaultPath(url, request);
 			} else {
 				return await ProtocolOverWSHandler(request);
 			}
@@ -383,7 +384,7 @@ async function handleDefaultPath(url, request) {
 	  </html>
 	`;
 
-
+	// 返回伪装的网盘页面
 	return new Response(DrivePage, {
 		headers: {
 			"content-type": "text/html;charset=UTF-8",
@@ -488,16 +489,16 @@ async function ProtocolOverWSHandler(request) {
 /**
  * Handles outbound TCP connections for the proxy.
  * Establishes connection to remote server and manages data flow.
- * @param {Socket} remoteSocket - Socket for remote connection
+ * @param {Socket} remoteSocket - Remote socket connection
  * @param {string} addressType - Type of address (IPv4/IPv6)
  * @param {string} addressRemote - Remote server address
  * @param {number} portRemote - Remote server port
  * @param {Uint8Array} rawClientData - Raw data from client
  * @param {WebSocket} webSocket - WebSocket connection
- * @param {Uint8Array} ProtocolResponseHeader - Protocol response header
+ * @param {Uint8Array} protocolResponseHeader - Protocol response header
  * @param {Function} log - Logging function
  */
-async function HandleTCPOutBound(remoteSocket, addressType, addressRemote, portRemote, rawClientData, webSocket, ProtocolResponseHeader, log,) {
+async function HandleTCPOutBound(remoteSocket, addressType, addressRemote, portRemote, rawClientData, webSocket, protocolResponseHeader, log,) {
 	async function connectAndWrite(address, port, socks = false) {
 		/** @type {import("@cloudflare/workers-types").Socket} */
 		let tcpSocket;
@@ -531,14 +532,14 @@ async function HandleTCPOutBound(remoteSocket, addressType, addressRemote, portR
 		}).finally(() => {
 			safeCloseWebSocket(webSocket);
 		})
-		RemoteSocketToWS(tcpSocket, webSocket, ProtocolResponseHeader, null, log);
+		RemoteSocketToWS(tcpSocket, webSocket, protocolResponseHeader, null, log);
 	}
 
 	let tcpSocket = await connectAndWrite(addressRemote, portRemote);
 
 	// when remoteSocket is ready, pass to websocket
 	// remote--> ws
-	RemoteSocketToWS(tcpSocket, webSocket, ProtocolResponseHeader, retry, log);
+	RemoteSocketToWS(tcpSocket, webSocket, protocolResponseHeader, retry, log);
 }
 
 /**
@@ -821,48 +822,49 @@ function stringify(arr, offset = 0) {
  * @param {ArrayBuffer} protocolResponseHeader - Protocol response header
  * @param {Function} log - Logging function
  */
+ 
 async function handleDNSQuery(udpChunk, webSocket, protocolResponseHeader, log) {
-	// no matter which DNS server client send, we alwasy use hard code one.
-	// beacsue someof DNS server is not support DNS over TCP
-	try {
-		const dnsServer = '8.8.4.4'; // change to 1.1.1.1 after cf fix connect own ip bug
-		const dnsPort = 53;
-		/** @type {ArrayBuffer | null} */
-		let vlessHeader = protocolResponseHeader;
-		/** @type {import("@cloudflare/workers-types").Socket} */
-		const tcpSocket = connect({
-			hostname: dnsServer,
-			port: dnsPort,
-		});
+    try {
+        const dnsServer = env.DNS_SERVER || '1.1.1.1'; 
+        const dnsPort = 53;
 
-		log(`connected to ${dnsServer}:${dnsPort}`);
-		const writer = tcpSocket.writable.getWriter();
-		await writer.write(udpChunk);
-		writer.releaseLock();
-		await tcpSocket.readable.pipeTo(new WritableStream({
-			async write(chunk) {
-				if (webSocket.readyState === WS_READY_STATE_OPEN) {
-					if (vlessHeader) {
-						webSocket.send(await new Blob([vlessHeader, chunk]).arrayBuffer());
-						vlessHeader = null;
-					} else {
-						webSocket.send(chunk);
-					}
-				}
-			},
-			close() {
-				log(`dns server(${dnsServer}) tcp is close`);
-			},
-			abort(reason) {
-				console.error(`dns server(${dnsServer}) tcp is abort`, reason);
-			},
-		}));
-	} catch (error) {
-		console.error(
-			`handleDNSQuery have exception, error: ${error.message}`
-		);
-	}
+        /** @type {ArrayBuffer | null} */
+        let vlessHeader = protocolResponseHeader;
+
+        /** @type {import("@cloudflare/workers-types").Socket} */
+        const tcpSocket = connect({
+            hostname: dnsServer,
+            port: dnsPort,
+        });
+
+        log(`connected to ${dnsServer}:${dnsPort}`);
+        const writer = tcpSocket.writable.getWriter();
+        await writer.write(udpChunk);
+        writer.releaseLock();
+
+        await tcpSocket.readable.pipeTo(new WritableStream({
+            async write(chunk) {
+                if (webSocket.readyState === WS_READY_STATE_OPEN) {
+                    if (vlessHeader) {
+                        webSocket.send(await new Blob([vlessHeader, chunk]).arrayBuffer());
+                        vlessHeader = null;
+                    } else {
+                        webSocket.send(chunk);
+                    }
+                }
+            },
+            close() {
+                log(`dns server(${dnsServer}) tcp is close`);
+            },
+            abort(reason) {
+                console.error(`dns server(${dnsServer}) tcp is abort`, reason);
+            },
+        }));
+    } catch (error) {
+        console.error(`handleDNSQuery have exception, error: ${error.message}`);
+    }
 }
+
 
 /**
  * Establishes SOCKS5 proxy connection.
@@ -1045,9 +1047,10 @@ const ed = 'RUR0dW5uZWw=';
  * Generates configuration for VLESS client.
  * @param {string} userIDs - Single or comma-separated user IDs
  * @param {string} hostName - Host name for configuration
+ * @param {string|string[]} proxyIP - Proxy IP address or array of addresses
  * @returns {string} Configuration HTML
  */
-function getConfig(userIDs, hostName) {
+function getConfig(userIDs, hostName, proxyIP) {
 	const commonUrlPart = `?encryption=none&security=tls&sni=${hostName}&fp=randomized&type=ws&host=${hostName}&path=%2F%3Fed%3D2048#${hostName}`;
 
 	// Split the userIDs into an array
@@ -1056,7 +1059,7 @@ function getConfig(userIDs, hostName) {
 	// Prepare output string for each userID
 	const sublink = `https://${hostName}/sub/${userIDArray[0]}?format=clash`
 	const subbestip = `https://${hostName}/bestip/${userIDArray[0]}`;
-	const clash_link = `https://url.v1.mk/sub?target=clash&url=${encodeURIComponent(sublink)}&insert=false&emoji=true&list=false&tfo=false&scv=true&fdn=false&sort=false&new_name=true`;
+	const clash_link = `https://url.v1.mk/sub?target=clash&url=${encodeURIComponent(`https://${hostName}/sub/${userIDArray[0]}?format=clash`)}&insert=false&emoji=true&list=false&tfo=false&scv=true&fdn=false&sort=false&new_name=true`;
 	// HTML Head with CSS and FontAwesome library
 	const htmlHead = `
   <head>
@@ -1067,12 +1070,12 @@ function getConfig(userIDs, hostName) {
     <meta property='og:title' content='EDtunnel - Protocol Configuration and Subscribe Output' />
     <meta property='og:description' content='Use Cloudflare Pages and Worker serverless to implement protocol' />
     <meta property='og:url' content='https://${hostName}/' />
-    <meta property='og:image' content='https://ipfs.io/ipfs/bafybeigd6i5aavwpr6wvnwuyayklq3omonggta4x2q7kpmgafj357nkcky' />
+    <meta property='og:image' content='https://cdn.jsdelivr.net/gh/6Kmfi6HP/EDtunnel@refs/heads/main/image/logo.png' />
     <meta name='twitter:card' content='summary_large_image' />
     <meta name='twitter:title' content='EDtunnel - Protocol Configuration and Subscribe Output' />
     <meta name='twitter:description' content='Use Cloudflare Pages and Worker serverless to implement protocol' />
     <meta name='twitter:url' content='https://${hostName}/' />
-    <meta name='twitter:image' content='https://ipfs.io/ipfs/bafybeigd6i5aavwpr6wvnwuyayklq3omonggta4x2q7kpmgafj357nkcky' />
+    <meta name='twitter:image' content='https://cdn.jsdelivr.net/gh/6Kmfi6HP/EDtunnel@refs/heads/main/image/logo.png' />
     <meta property='og:image:width' content='1500' />
     <meta property='og:image:height' content='1500' />
 
@@ -1197,9 +1200,9 @@ function getConfig(userIDs, hostName) {
 	const header = `
     <div class="container">
       <h1>EDtunnel: Protocol Configuration</h1>
-      <img src="https://ipfs.io/ipfs/bafybeigd6i5aavwpr6wvnwuyayklq3omonggta4x2q7kpmgafj357nkcky" alt="EDtunnel Logo" class="logo">
+      <img src="https://cdn.jsdelivr.net/gh/6Kmfi6HP/EDtunnel@refs/heads/main/image/logo.png" alt="EDtunnel Logo" class="logo">
       <p>Welcome! This function generates configuration for the vless protocol. If you found this useful, please check our GitHub project:</p>
-      <p><a href="https://github.com/NiREvil/Emotional-Damage" target="_blank" style="color: #00ff00;">EDtunnel - https://github.com/NiREvil/Emotional-Damage</a></p>
+      <p><a href="https://github.com/6Kmfi6HP/EDtunnel" target="_blank" style="color: #00ff00;">EDtunnel - https://github.com/6Kmfi6HP/EDtunnel</a></p>
       <div style="clear: both;"></div>
       <div class="btn-group">
         <a href="//${hostName}/sub/${userIDArray[0]}" class="btn" target="_blank"><i class="fas fa-link"></i> VLESS Subscription</a>
@@ -1222,7 +1225,7 @@ function getConfig(userIDs, hostName) {
 
 	const configOutput = userIDArray.map((userID) => {
 		const protocolMain = atob(pt) + '://' + userID + atob(at) + hostName + ":443" + commonUrlPart;
-		const protocolSec = atob(pt) + '://' + userID + atob(at) + proxyIP + ":" + proxyPort + commonUrlPart;
+		const protocolSec = atob(pt) + '://' + userID + atob(at) + proxyIP[0].split(':')[0] + ":" + proxyPort + commonUrlPart;
 		return `
       <div class="container config-item">
         <h2>UUID: ${userID}</h2>
@@ -1233,9 +1236,17 @@ function getConfig(userIDs, hostName) {
         </div>
         
         <h3>Best IP Configuration</h3>
+        <div class="input-group mb-3">
+          <select class="form-select" id="proxySelect" onchange="updateProxyConfig()">
+            ${typeof proxyIP === 'string' ? 
+              `<option value="${proxyIP}">${proxyIP}</option>` : 
+              Array.from(proxyIP).map(proxy => `<option value="${proxy}">${proxy}</option>`).join('')}
+          </select>
+        </div>
+		<br>
         <div class="code-container">
-          <pre><code>${protocolSec}</code></pre>
-          <button class="btn copy-btn" onclick='copyToClipboard("${protocolSec}")'><i class="fas fa-copy"></i> Copy</button>
+          <pre><code id="proxyConfig">${protocolSec}</code></pre>
+          <button class="btn copy-btn" onclick='copyToClipboard(document.getElementById("proxyConfig").textContent)'><i class="fas fa-copy"></i> Copy</button>
         </div>
       </div>
     `;
@@ -1247,18 +1258,31 @@ function getConfig(userIDs, hostName) {
   <body>
     ${header}
     ${configOutput}
+    <script>
+      const userIDArray = ${JSON.stringify(userIDArray)};
+      const pt = "${pt}";
+      const at = "${at}";
+      const commonUrlPart = "?encryption=none&security=tls&sni=${hostName}&fp=randomized&type=ws&host=${hostName}&path=%2F%3Fed%3D2048#${hostName}";
+
+      function copyToClipboard(text) {
+        navigator.clipboard.writeText(text)
+          .then(() => {
+            alert("Copied to clipboard");
+          })
+          .catch((err) => {
+            console.error("Failed to copy to clipboard:", err);
+          });
+      }
+
+      function updateProxyConfig() {
+        const select = document.getElementById('proxySelect');
+        const proxyValue = select.value;
+        const [host, port] = proxyValue.split(':');
+        const protocolSec = atob(pt) + '://' + userIDArray[0] + atob(at) + host + ":" + port + commonUrlPart;
+        document.getElementById("proxyConfig").textContent = protocolSec;
+      }
+    </script>
   </body>
-  <script>
-    function copyToClipboard(text) {
-      navigator.clipboard.writeText(text)
-        .then(() => {
-          alert("Copied to clipboard");
-        })
-        .catch((err) => {
-          console.error("Failed to copy to clipboard:", err);
-        });
-    }
-  </script>
   </html>`;
 }
 
@@ -1269,38 +1293,110 @@ const HttpsPort = new Set([443, 8443, 2053, 2096, 2087, 2083]);
  * Generates subscription content.
  * @param {string} userID_path - User ID path
  * @param {string} hostname - Host name
+ * @param {string|string[]} proxyIP - Proxy IP address or array of addresses
  * @returns {string} Subscription content
  */
-function GenSub(userID_path, hostname) {
-	const userIDArray = userID_path.includes(',') ? userID_path.split(',') : [userID_path];
+function GenSub(userID_path, hostname, proxyIP) {
+	// Add all CloudFlare public CNAME domains
+	const mainDomains = new Set([
+		hostname,
+		// public domains
+		'icook.hk',
+		'japan.com',
+		'malaysia.com',
+		'russia.com',
+		'singapore.com',
+		'www.visa.com',
+		'www.csgo.com',
+		'www.shopify.com',
+		'www.whatismyip.com',
+		'www.ipget.net',       
+		'cfip.cfcdn.vip',               
+		proxyIPs,
+		'nima.nscl.ir',
+		'bpb.radically.pro',
+		'cf.0sm.com',               
+		'cloudflare-ip.mofashi.ltd', 
+		'cf.090227.xyz',     
+		'cf.zhetengsha.eu.org',  
+		'cloudflare.9jy.cc',      
+		'cf.zerone-cdn.pp.ua',     
+		'cfip.1323123.xyz',    
+		'cdn.tzpro.xyz', 
+		'cf.877771.xyz',  
+		'cnamefuckxxs.yuchen.icu',  
+		'cfip.xxxxxxxx.tk', 
+	]);
+
+	const userIDArray = userID_path.includes(',') ? userID_path.split(",") : [userID_path];
+	const proxyIPArray = Array.isArray(proxyIP) ? proxyIP : (proxyIP ? (proxyIP.includes(',') ? proxyIP.split(',') : [proxyIP]) : proxyIPs);
 	const randomPath = () => '/' + Math.random().toString(36).substring(2, 15) + '?ed=2048';
 	const commonUrlPartHttp = `?encryption=none&security=none&fp=random&type=ws&host=${hostname}&path=${encodeURIComponent(randomPath())}#`;
 	const commonUrlPartHttps = `?encryption=none&security=tls&sni=${hostname}&fp=random&type=ws&host=${hostname}&path=%2F%3Fed%3D2048#`;
 
 	const result = userIDArray.flatMap((userID) => {
-		const PartHttp = Array.from(HttpPort).flatMap((port) => {
-			if (!hostname.includes('pages.dev')) {
-				const urlPart = `${hostname}-HTTP-${port}`;
-				const mainProtocolHttp = atob(pt) + '://' + userID + atob(at) + hostname + ':' + port + commonUrlPartHttp + urlPart;
-				return proxyIPs.flatMap((proxyIP) => {
-					const secondaryProtocolHttp = atob(pt) + '://' + userID + atob(at) + proxyIP.split(':')[0] + ':' + proxyPort + commonUrlPartHttp + urlPart + '-' + proxyIP + '-' + atob(ed);
-					return [mainProtocolHttp, secondaryProtocolHttp];
+		let allUrls = [];
+		// Generate main HTTP URLs first for all domains
+		if (!hostname.includes('pages.dev')) {
+			mainDomains.forEach(domain => {
+				Array.from(HttpPort).forEach((port) => {
+					const urlPart = `${hostname.split('.')[0]}-${domain}-HTTP-${port}`;
+					const mainProtocolHttp = atob(pt) + '://' + userID + atob(at) + domain + ':' + port + commonUrlPartHttp + urlPart;
+					allUrls.push(mainProtocolHttp);
 				});
-			}
-			return [];
-		});
+			});
+		}
 
-		const PartHttps = Array.from(HttpsPort).flatMap((port) => {
-			const urlPart = `${hostname}-HTTPS-${port}`;
-			const mainProtocolHttps = atob(pt) + '://' + userID + atob(at) + hostname + ':' + port + commonUrlPartHttps + urlPart;
-			return proxyIPs.flatMap((proxyIP) => {
-				const secondaryProtocolHttps = atob(pt) + '://' + userID + atob(at) + proxyIP.split(':')[0] + ':' + proxyPort + commonUrlPartHttps + urlPart + '-' + proxyIP + '-' + atob(ed);
-				return [mainProtocolHttps, secondaryProtocolHttps];
+		// Generate main HTTPS URLs for all domains
+		mainDomains.forEach(domain => {
+			Array.from(HttpsPort).forEach((port) => {
+				const urlPart = `${hostname.split('.')[0]}-${domain}-HTTPS-${port}`;
+				const mainProtocolHttps = atob(pt) + '://' + userID + atob(at) + domain + ':' + port + commonUrlPartHttps + urlPart;
+				allUrls.push(mainProtocolHttps);
 			});
 		});
 
-		return [...PartHttp, ...PartHttps];
+		// Generate proxy HTTPS URLs
+		proxyIPArray.forEach((proxyAddr) => {
+			const [proxyHost, proxyPort = '443'] = proxyAddr.split(':');
+			const urlPart = `${hostname.split('.')[0]}-${proxyHost}-HTTPS-${proxyPort}`;
+			const secondaryProtocolHttps = atob(pt) + '://' + userID + atob(at) + proxyHost + ':' + proxyPort + commonUrlPartHttps + urlPart + '-' + atob(ed);
+			allUrls.push(secondaryProtocolHttps);
+		});
+
+		return allUrls;
 	});
 
-	return result.join('\n');
+	return btoa(result.join('\n'));
+	// return result.join('\n');
+}
+
+/**
+ * Handles proxy configuration and returns standardized proxy settings
+ * @param {string} PROXYIP - Proxy IP configuration from environment
+ * @returns {{ip: string, port: string}} Standardized proxy configuration
+ */
+function handleProxyConfig(PROXYIP) {
+	if (PROXYIP) {
+		const proxyAddresses = PROXYIP.split(',').map(addr => addr.trim());
+		const selectedProxy = selectRandomAddress(proxyAddresses);
+		const [ip, port = '443'] = selectedProxy.split(':');
+		return { ip, port };
+	} else {
+		const port = proxyIP.includes(':') ? proxyIP.split(':')[1] : '443';
+		const ip = proxyIP.split(':')[0];
+		return { ip, port };
+	}
+}
+
+/**
+ * Selects a random address from a comma-separated string or array of addresses
+ * @param {string|string[]} addresses - Comma-separated string or array of addresses
+ * @returns {string} Selected address
+ */
+function selectRandomAddress(addresses) {
+	const addressArray = typeof addresses === 'string' ?
+		addresses.split(',').map(addr => addr.trim()) :
+		addresses;
+	return addressArray[Math.floor(Math.random() * addressArray.length)];
 }
