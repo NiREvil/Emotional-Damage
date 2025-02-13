@@ -822,49 +822,71 @@ function stringify(arr, offset = 0) {
  * @param {ArrayBuffer} protocolResponseHeader - Protocol response header
  * @param {Function} log - Logging function
  */
- 
-async function handleDNSQuery(udpChunk, webSocket, protocolResponseHeader, log) {
-    try {
-        const dnsServer = env.DNS_SERVER || '1.1.1.1'; 
-        const dnsPort = 53;
+async function handleUDPOutBound(webSocket, protocolResponseHeader, log) {
+	let isHeaderSent = false;
 
-        /** @type {ArrayBuffer | null} */
-        let vlessHeader = protocolResponseHeader;
+	const transformStream = new TransformStream({
+		start(controller) {},
+		transform(chunk, controller) {
+			// udp message 2 byte is the the length of udp data
+			// TODO: this should have bug, because maybe udp chunk can be in two websocket message
+			for (let index = 0; index < chunk.byteLength; ) {
+				const lengthBuffer = chunk.slice(index, index + 2);
+				const udpPakcetLength = new DataView(lengthBuffer).getUint16(0);
+				const udpData = new Uint8Array(chunk.slice(index + 2, index + 2 + udpPakcetLength));
+				index = index + 2 + udpPakcetLength;
+				controller.enqueue(udpData);
+			}
+		},
+		flush(controller) {},
+	});
 
-        /** @type {import("@cloudflare/workers-types").Socket} */
-        const tcpSocket = connect({
-            hostname: dnsServer,
-            port: dnsPort,
-        });
+	// only handle dns udp for now
+	transformStream.readable
+		.pipeTo(
+			new WritableStream({
+				async write(chunk) {
+					const resp = await fetch('https://1.1.1.1/dns-query', {
+						method: 'POST',
+						headers: {
+							'content-type': 'application/dns-message',
+						},
+						body: chunk,
+					});
+					const dnsQueryResult = await resp.arrayBuffer();
+					const udpSize = dnsQueryResult.byteLength;
+					const udpSizeBuffer = new Uint8Array([(udpSize >> 8) & 0xff, udpSize & 0xff]);
 
-        log(`connected to ${dnsServer}:${dnsPort}`);
-        const writer = tcpSocket.writable.getWriter();
-        await writer.write(udpChunk);
-        writer.releaseLock();
+					if (webSocket.readyState === WS_READY_STATE_OPEN) {
+						log(`dns query success, length: ${udpSize}`);
+						if (isHeaderSent) {
+							webSocket.send(await new Blob([udpSizeBuffer, dnsQueryResult]).arrayBuffer());
+						} else {
+							webSocket.send(
+								await new Blob([protocolResponseHeader, udpSizeBuffer, dnsQueryResult]).arrayBuffer(),
+							);
+							isHeaderSent = true;
+						}
+					}
+				},
+			})
+		)
+		.catch(error => {
+			log('dns query error: ' + error);
+		});
 
-        await tcpSocket.readable.pipeTo(new WritableStream({
-            async write(chunk) {
-                if (webSocket.readyState === WS_READY_STATE_OPEN) {
-                    if (vlessHeader) {
-                        webSocket.send(await new Blob([vlessHeader, chunk]).arrayBuffer());
-                        vlessHeader = null;
-                    } else {
-                        webSocket.send(chunk);
-                    }
-                }
-            },
-            close() {
-                log(`dns server(${dnsServer}) tcp is close`);
-            },
-            abort(reason) {
-                console.error(`dns server(${dnsServer}) tcp is abort`, reason);
-            },
-        }));
-    } catch (error) {
-        console.error(`handleDNSQuery have exception, error: ${error.message}`);
-    }
+	const writer = transformStream.writable.getWriter();
+
+	return {
+		/**
+		 *
+		 * @param {Uint8Array} chunk
+		 */
+		write(chunk) {
+			writer.write(chunk);
+		},
+	};
 }
-
 
 /**
  * Establishes SOCKS5 proxy connection.
